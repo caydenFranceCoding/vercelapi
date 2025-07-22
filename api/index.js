@@ -7,9 +7,9 @@ require('dotenv').config();
 const app = express();
 
 const CONFIG = {
-  CACHE_TTL: 6 * 60 * 60 * 1000, // 6 hours for vercel
-  MAX_CACHE_SIZE: 1000, // smaller cache for serverless operations
-  RATE_LIMIT_WINDOW: 15 * 60 * 1000, // 15 minutes
+  CACHE_TTL: 6 * 60 * 60 * 1000,
+  MAX_CACHE_SIZE: 1000,
+  RATE_LIMIT_WINDOW: 15 * 60 * 1000,
   MAX_REQUESTS_PER_WINDOW: 200,
   SMARTYSTREETS_TIMEOUT: 8000,
   NOMINATIM_TIMEOUT: 5000,
@@ -210,7 +210,7 @@ const smartyAxios = axios.create({
   baseURL: 'https://us-street.api.smartystreets.com',
   timeout: CONFIG.SMARTYSTREETS_TIMEOUT,
   headers: {
-    'User-Agent': 'WattKarma-OhioEnergyAPI-Vercel/2.1',
+    'User-Agent': 'WattKarma-MultiStateAPI-Vercel/2.1',
     'Accept': 'application/json',
     'Accept-Encoding': 'gzip, deflate',
     'Content-Type': 'application/json'
@@ -221,7 +221,7 @@ const nominatimAxios = axios.create({
   baseURL: 'https://nominatim.openstreetmap.org',
   timeout: CONFIG.NOMINATIM_TIMEOUT,
   headers: {
-    'User-Agent': 'OhioEnergyAPI-Vercel/2.1 (contact@wattkarma.com)',
+    'User-Agent': 'MultiStateAPI-Vercel/2.1 (contact@wattkarma.com)',
     'Accept': 'application/json',
     'Accept-Encoding': 'gzip, deflate'
   }
@@ -254,14 +254,14 @@ function requestLogger(req, res, next) {
 
 app.use('/api/', requestLogger);
 
-function formatSmartyStreetsAddress(data) {
+function formatSmartyStreetsAddress(data, targetState = null) {
   try {
     if (!data?.components || !data.delivery_line_1?.trim()) return null;
 
     const address = data.delivery_line_1.trim();
     const unit = data.delivery_line_2?.trim();
     const city = (data.components.city_name || '').trim();
-    const state = data.components.state_abbreviation || 'OH';
+    const state = data.components.state_abbreviation || targetState;
     const zipcode = (data.components.zipcode || '').trim();
     const zip4 = data.components.plus4_code ? `${zipcode}-${data.components.plus4_code}` : zipcode;
 
@@ -302,7 +302,7 @@ function formatSmartyStreetsAddress(data) {
   }
 }
 
-function formatNominatimAddress(data) {
+function formatNominatimAddress(data, targetState = null) {
   try {
     if (!data?.address) return null;
 
@@ -325,6 +325,8 @@ function formatNominatimAddress(data) {
 
     if (state.toLowerCase() === 'ohio') {
       state = 'OH';
+    } else if (state.toLowerCase() === 'texas') {
+      state = 'TX';
     }
 
     return {
@@ -348,27 +350,50 @@ function formatNominatimAddress(data) {
   }
 }
 
-function getFallbackOhioAddresses(query) {
-  const commonOhioAddresses = [
-    { address: "123 Main St", city: "Columbus", state: "OH", zipcode: "43215", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "456 High St", city: "Columbus", state: "OH", zipcode: "43215", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "789 Broad St", city: "Columbus", state: "OH", zipcode: "43215", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "321 Superior Ave", city: "Cleveland", state: "OH", zipcode: "44101", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "654 Euclid Ave", city: "Cleveland", state: "OH", zipcode: "44101", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "987 Vine St", city: "Cincinnati", state: "OH", zipcode: "45201", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "147 Race St", city: "Cincinnati", state: "OH", zipcode: "45201", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "258 Market St", city: "Akron", state: "OH", zipcode: "44301", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "369 Wayne Ave", city: "Dayton", state: "OH", zipcode: "45402", verified: false, source: "fallback", confidence: "fallback" },
-    { address: "741 Madison Ave", city: "Toledo", state: "OH", zipcode: "43604", verified: false, source: "fallback", confidence: "fallback" }
-  ];
+function getFallbackAddresses(query, state = 'OH') {
+  const fallbackData = {
+    OH: [
+      { address: "123 Main St", city: "Columbus", state: "OH", zipcode: "43215" },
+      { address: "456 High St", city: "Columbus", state: "OH", zipcode: "43215" },
+      { address: "789 Broad St", city: "Columbus", state: "OH", zipcode: "43215" },
+      { address: "321 Superior Ave", city: "Cleveland", state: "OH", zipcode: "44101" },
+      { address: "654 Euclid Ave", city: "Cleveland", state: "OH", zipcode: "44101" },
+      { address: "987 Vine St", city: "Cincinnati", state: "OH", zipcode: "45201" },
+      { address: "147 Race St", city: "Cincinnati", state: "OH", zipcode: "45201" },
+      { address: "258 Market St", city: "Akron", state: "OH", zipcode: "44301" },
+      { address: "369 Wayne Ave", city: "Dayton", state: "OH", zipcode: "45402" },
+      { address: "741 Madison Ave", city: "Toledo", state: "OH", zipcode: "43604" }
+    ],
+    TX: [
+      { address: "123 Main St", city: "Houston", state: "TX", zipcode: "77001" },
+      { address: "456 Congress Ave", city: "Austin", state: "TX", zipcode: "78701" },
+      { address: "789 Elm St", city: "Dallas", state: "TX", zipcode: "75201" },
+      { address: "321 Commerce St", city: "Fort Worth", state: "TX", zipcode: "76102" },
+      { address: "654 Broadway", city: "San Antonio", state: "TX", zipcode: "78205" },
+      { address: "987 University Dr", city: "College Station", state: "TX", zipcode: "77840" },
+      { address: "147 6th St", city: "Austin", state: "TX", zipcode: "78701" },
+      { address: "258 Westheimer Rd", city: "Houston", state: "TX", zipcode: "77006" },
+      { address: "369 McKinney Ave", city: "Dallas", state: "TX", zipcode: "75204" },
+      { address: "741 River Walk", city: "San Antonio", state: "TX", zipcode: "78205" }
+    ]
+  };
 
+  const addresses = fallbackData[state] || fallbackData.OH;
   const queryLower = query.toLowerCase();
 
-  return commonOhioAddresses.filter(addr => {
-    const addressLower = `${addr.address} ${addr.city}`.toLowerCase();
-    return addressLower.includes(queryLower) ||
-           queryLower.split(' ').some(word => word.length > 2 && addressLower.includes(word));
-  }).slice(0, 5);
+  return addresses
+    .map(addr => ({
+      ...addr,
+      verified: false,
+      source: "fallback",
+      confidence: "fallback"
+    }))
+    .filter(addr => {
+      const addressLower = `${addr.address} ${addr.city}`.toLowerCase();
+      return addressLower.includes(queryLower) ||
+             queryLower.split(' ').some(word => word.length > 2 && addressLower.includes(word));
+    })
+    .slice(0, 5);
 }
 
 async function validateSmartyStreetsConfig() {
@@ -413,7 +438,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     success: true,
     status: 'healthy',
-    service: 'Ohio Address API',
+    service: 'Multi-State Address API',
     version: '2.1.0',
     platform: 'vercel',
     environment: process.env.NODE_ENV || 'development',
@@ -432,6 +457,7 @@ app.get('/api/health', (req, res) => {
       nominatim: true,
       fallback: true
     },
+    supported_states: ['OH', 'TX'],
     config: {
       platform: 'vercel-serverless',
       rateLimit: `${CONFIG.MAX_REQUESTS_PER_WINDOW}/${CONFIG.RATE_LIMIT_WINDOW / 60000}min`,
@@ -474,7 +500,7 @@ app.get('/api/test-smartystreets', async (req, res) => {
       }
     });
 
-    const formatted = response.data.map(formatSmartyStreetsAddress).filter(Boolean);
+    const formatted = response.data.map(data => formatSmartyStreetsAddress(data, state)).filter(Boolean);
 
     res.json({
       success: true,
@@ -499,8 +525,8 @@ app.get('/api/test-smartystreets', async (req, res) => {
 });
 
 app.get('/api/test-fallback', (req, res) => {
-  const { query = 'main' } = req.query;
-  const suggestions = getFallbackOhioAddresses(query);
+  const { query = 'main', state = 'OH' } = req.query;
+  const suggestions = getFallbackAddresses(query, state.toUpperCase());
 
   res.json({
     success: true,
@@ -508,17 +534,17 @@ app.get('/api/test-fallback', (req, res) => {
     metadata: {
       source: 'test-fallback',
       count: suggestions.length,
-      query: query
+      query: query,
+      state: state.toUpperCase()
     }
   });
 });
 
-// Main address suggestions endpoint
-app.get('/api/ohio-address-suggestions', async (req, res) => {
+app.get('/api/address-suggestions', async (req, res) => {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 
   try {
-    const { query, limit = 5, format = 'standard' } = req.query;
+    const { query, limit = 5, format = 'standard', state = 'OH' } = req.query;
 
     if (!query || typeof query !== 'string' || query.trim().length < 2) {
       return res.status(400).json({
@@ -529,9 +555,19 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
       });
     }
 
+    const targetState = (state || 'OH').toUpperCase();
+    if (!['OH', 'TX'].includes(targetState)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid state parameter',
+        message: 'State must be OH (Ohio) or TX (Texas)',
+        code: 'INVALID_STATE'
+      });
+    }
+
     const normalizedQuery = query.trim().toLowerCase();
     const resultLimit = Math.min(Math.max(parseInt(limit) || 5, 1), 15);
-    const cacheKey = `ohio_addr:${normalizedQuery}:${resultLimit}:${format}`;
+    const cacheKey = `addr:${targetState}:${normalizedQuery}:${resultLimit}:${format}`;
 
     const cached = cache.get(cacheKey);
     if (cached) {
@@ -542,6 +578,7 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
         metadata: {
           source: 'cache',
           query: normalizedQuery,
+          state: targetState,
           count: cached.addresses.length,
           requestId,
           cached: true
@@ -552,6 +589,7 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
     let rawSuggestions = [];
     let metadata = {
       query: normalizedQuery,
+      state: targetState,
       count: 0,
       requestId,
       cached: false,
@@ -564,7 +602,7 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
 
     if (smartyConfigured) {
       try {
-        console.log(`[${requestId}] Trying SmartyStreets for: "${normalizedQuery}"`);
+        console.log(`[${requestId}] Trying SmartyStreets for: "${normalizedQuery}" in ${targetState}`);
 
         const response = await retryWithBackoff(() =>
           smartyAxios.get('/street-address', {
@@ -572,7 +610,7 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
               'auth-id': authId,
               'auth-token': authToken,
               street: query.trim(),
-              state: 'OH',
+              state: targetState,
               candidates: Math.min(resultLimit + 5, 15),
               match: 'enhanced'
             }
@@ -581,9 +619,9 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
 
         if (Array.isArray(response.data) && response.data.length > 0) {
           const formatted = response.data
-            .map(formatSmartyStreetsAddress)
+            .map(data => formatSmartyStreetsAddress(data, targetState))
             .filter(Boolean)
-            .filter(addr => addr.state === 'OH')
+            .filter(addr => addr.state === targetState)
             .sort((a, b) => {
               const confidenceOrder = { 'high': 3, 'medium': 2, 'low': 1 };
               const aScore = confidenceOrder[a.confidence] || 0;
@@ -603,8 +641,8 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
         }
 
         if (rawSuggestions.length === 0) {
-          console.log(`[${requestId}] SmartyStreets returned no Ohio addresses`);
-          metadata.providers.push('smartystreets_no_ohio_results');
+          console.log(`[${requestId}] SmartyStreets returned no ${targetState} addresses`);
+          metadata.providers.push(`smartystreets_no_${targetState.toLowerCase()}_results`);
         }
 
       } catch (error) {
@@ -619,12 +657,13 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
 
     if (rawSuggestions.length < 3) {
       try {
-        console.log(`[${requestId}] Trying Nominatim for additional results: "${normalizedQuery}"`);
+        const stateName = targetState === 'OH' ? 'Ohio' : 'Texas';
+        console.log(`[${requestId}] Trying Nominatim for additional results: "${normalizedQuery}" in ${stateName}`);
 
         const nominatimResponse = await Promise.race([
           nominatimAxios.get('/search', {
             params: {
-              q: `${query.trim()}, Ohio, USA`,
+              q: `${query.trim()}, ${stateName}, USA`,
               format: 'json',
               addressdetails: 1,
               limit: Math.min(resultLimit + 3, 10),
@@ -638,12 +677,17 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
         ]);
 
         if (Array.isArray(nominatimResponse.data) && nominatimResponse.data.length > 0) {
-          const ohioAddresses = nominatimResponse.data
+          const stateAddresses = nominatimResponse.data
             .filter(addr => {
               const state = addr.address?.state?.toLowerCase();
-              return state && (state.includes('ohio') || state === 'oh');
+              if (targetState === 'OH') {
+                return state && (state.includes('ohio') || state === 'oh');
+              } else if (targetState === 'TX') {
+                return state && (state.includes('texas') || state === 'tx');
+              }
+              return false;
             })
-            .map(formatNominatimAddress)
+            .map(data => formatNominatimAddress(data, targetState))
             .filter(Boolean)
             .filter(addr => {
               return !rawSuggestions.some(existing =>
@@ -652,13 +696,13 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
               );
             });
 
-          if (ohioAddresses.length > 0) {
-            rawSuggestions = [...rawSuggestions, ...ohioAddresses].slice(0, resultLimit);
+          if (stateAddresses.length > 0) {
+            rawSuggestions = [...rawSuggestions, ...stateAddresses].slice(0, resultLimit);
             metadata.providers.push('nominatim');
             metadata.nominatim_raw_count = nominatimResponse.data.length;
-            console.log(`[${requestId}] Nominatim added ${ohioAddresses.length} additional results`);
+            console.log(`[${requestId}] Nominatim added ${stateAddresses.length} additional results`);
           } else {
-            metadata.providers.push('nominatim_no_ohio_results');
+            metadata.providers.push(`nominatim_no_${targetState.toLowerCase()}_results`);
           }
         } else {
           metadata.providers.push('nominatim_no_results');
@@ -671,8 +715,8 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
     }
 
     if (rawSuggestions.length < 2) {
-      console.log(`[${requestId}] Using fallback addresses for query: "${normalizedQuery}"`);
-      const fallbackSuggestions = getFallbackOhioAddresses(normalizedQuery);
+      console.log(`[${requestId}] Using fallback addresses for query: "${normalizedQuery}" in ${targetState}`);
+      const fallbackSuggestions = getFallbackAddresses(normalizedQuery, targetState);
 
       if (fallbackSuggestions.length > 0) {
         const uniqueFallbacks = fallbackSuggestions.filter(fallback => {
@@ -688,10 +732,13 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
     }
 
     if (rawSuggestions.length === 0) {
+      const defaultCity = targetState === 'OH' ? 'Columbus' : 'Houston';
+      const defaultZip = targetState === 'OH' ? '43215' : '77001';
+      
       rawSuggestions = [
-        { address: "123 Main St", city: "Columbus", state: "OH", zipcode: "43215", verified: false, source: "default", confidence: "low" },
-        { address: "456 High St", city: "Columbus", state: "OH", zipcode: "43215", verified: false, source: "default", confidence: "low" },
-        { address: "789 Broad St", city: "Columbus", state: "OH", zipcode: "43215", verified: false, source: "default", confidence: "low" }
+        { address: "123 Main St", city: defaultCity, state: targetState, zipcode: defaultZip, verified: false, source: "default", confidence: "low" },
+        { address: "456 High St", city: defaultCity, state: targetState, zipcode: defaultZip, verified: false, source: "default", confidence: "low" },
+        { address: "789 Broad St", city: defaultCity, state: targetState, zipcode: defaultZip, verified: false, source: "default", confidence: "low" }
       ];
       metadata.providers.push('default');
     }
@@ -737,14 +784,18 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
   } catch (error) {
     console.error(`[${requestId}] Unexpected error:`, error);
 
+    const defaultCity = req.query.state === 'TX' ? 'Houston' : 'Columbus';
+    const defaultState = req.query.state === 'TX' ? 'TX' : 'OH';
+    const defaultZip = req.query.state === 'TX' ? '77001' : '43215';
+
     const emergencyAddresses = [
       {
         id: 'addr_emergency',
-        fullAddress: '123 Main St, Columbus, OH 43215',
+        fullAddress: `123 Main St, ${defaultCity}, ${defaultState} ${defaultZip}`,
         address: '123 Main St',
-        city: 'Columbus',
-        state: 'OH',
-        zipcode: '43215',
+        city: defaultCity,
+        state: defaultState,
+        zipcode: defaultZip,
         verified: false,
         confidence: 'low',
         source: 'emergency',
@@ -754,8 +805,8 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
 
     const emergencyOptions = [
       {
-        value: '123 Main St, Columbus, OH 43215',
-        label: '123 Main St, Columbus, OH 43215',
+        value: `123 Main St, ${defaultCity}, ${defaultState} ${defaultZip}`,
+        label: `123 Main St, ${defaultCity}, ${defaultState} ${defaultZip}`,
         verified: false,
         confidence: 'low',
         id: 'addr_emergency'
@@ -768,6 +819,7 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
       options: emergencyOptions,
       metadata: {
         query: req.query.query || '',
+        state: defaultState,
         count: 1,
         requestId,
         source: 'emergency',
@@ -778,9 +830,29 @@ app.get('/api/ohio-address-suggestions', async (req, res) => {
   }
 });
 
+app.get('/api/ohio-address-suggestions', async (req, res) => {
+  const queryParams = new URLSearchParams(req.query);
+  queryParams.set('state', 'OH');
+  
+  req.query = Object.fromEntries(queryParams);
+  req.url = '/api/address-suggestions';
+  
+  return app._router.handle(req, res, () => {});
+});
+
+app.get('/api/texas-address-suggestions', async (req, res) => {
+  const queryParams = new URLSearchParams(req.query);
+  queryParams.set('state', 'TX');
+  
+  req.query = Object.fromEntries(queryParams);
+  req.url = '/api/address-suggestions';
+  
+  return app._router.handle(req, res, () => {});
+});
+
 app.get('/api/address-options', async (req, res) => {
   try {
-    const { query, limit = 8 } = req.query;
+    const { query, limit = 8, state = 'OH' } = req.query;
 
     if (!query || typeof query !== 'string' || query.trim().length < 2) {
       return res.status(400).json({
@@ -790,9 +862,10 @@ app.get('/api/address-options', async (req, res) => {
       });
     }
 
+    const targetState = (state || 'OH').toUpperCase();
     const normalizedQuery = query.trim().toLowerCase();
     const resultLimit = Math.min(Math.max(parseInt(limit) || 8, 1), 15);
-    const cacheKey = `ohio_addr:${normalizedQuery}:${resultLimit}:standard`;
+    const cacheKey = `addr:${targetState}:${normalizedQuery}:${resultLimit}:standard`;
 
     const cached = cache.get(cacheKey);
     if (cached) {
@@ -800,11 +873,12 @@ app.get('/api/address-options', async (req, res) => {
         success: true,
         options: cached.options || [],
         count: cached.options?.length || 0,
-        query: query.trim()
+        query: query.trim(),
+        state: targetState
       });
     }
 
-    const fallbackSuggestions = getFallbackOhioAddresses(normalizedQuery);
+    const fallbackSuggestions = getFallbackAddresses(normalizedQuery, targetState);
     const options = fallbackSuggestions.map((addr, index) => ({
       value: `${addr.address}, ${addr.city}, ${addr.state} ${addr.zipcode}`,
       label: `${addr.address}, ${addr.city}, ${addr.state} ${addr.zipcode}`,
@@ -817,7 +891,8 @@ app.get('/api/address-options', async (req, res) => {
       success: true,
       options: options,
       count: options.length,
-      query: query.trim()
+      query: query.trim(),
+      state: targetState
     });
 
   } catch (error) {
@@ -832,34 +907,42 @@ app.get('/api/address-options', async (req, res) => {
 
 app.get('/api/docs', (req, res) => {
   res.json({
-    service: 'Ohio Address API',
+    service: 'Multi-State Address API',
     version: '2.1.0',
     platform: 'vercel',
+    supported_states: ['OH', 'TX'],
     documentation: {
       endpoints: {
-        'GET /api/ohio-address-suggestions': {
-          description: 'Search for Ohio address suggestions with detailed data',
+        'GET /api/address-suggestions': {
+          description: 'Unified address search for Ohio and Texas (recommended)',
           parameters: {
             query: 'string (required, min 2 chars)',
+            state: 'string (optional, OH or TX, default OH)',
             limit: 'number (optional, 1-15, default 5)',
             format: 'string (optional, "standard" or "detailed")'
           },
-          example: '/api/ohio-address-suggestions?query=123%20Main&limit=8',
+          example: '/api/address-suggestions?query=123%20Main&state=TX&limit=8',
           response: {
             addresses: 'Array of detailed address objects',
             options: 'Array of formatted options for dropdowns'
           }
         },
+        'GET /api/ohio-address-suggestions': {
+          description: 'Legacy Ohio-specific endpoint (redirects to unified)',
+          note: 'Use /api/address-suggestions?state=OH instead'
+        },
+        'GET /api/texas-address-suggestions': {
+          description: 'Texas-specific endpoint (redirects to unified)',
+          note: 'Use /api/address-suggestions?state=TX instead'
+        },
         'GET /api/address-options': {
           description: 'Get clean address options for form dropdowns/selects',
           parameters: {
             query: 'string (required, min 2 chars)',
+            state: 'string (optional, OH or TX, default OH)',
             limit: 'number (optional, 1-15, default 8)'
           },
-          example: '/api/address-options?query=123%20Main&limit=8',
-          response: {
-            options: 'Array of {value, label, verified, confidence, id}'
-          }
+          example: '/api/address-options?query=123%20Main&state=TX&limit=8'
         },
         'GET /api/test-smartystreets': 'Test SmartyStreets API connection',
         'GET /api/test-fallback': 'Test fallback addresses',
@@ -876,11 +959,12 @@ app.get('/api/docs', (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    service: 'Ohio Address API',
+    service: 'Multi-State Address API',
     version: '2.1.0',
     platform: 'vercel',
     status: 'operational',
     environment: process.env.NODE_ENV || 'development',
+    supported_states: ['OH', 'TX'],
     docs: '/api/docs',
     smartystreets_configured: !!(process.env.SMARTYSTREETS_AUTH_ID && process.env.SMARTYSTREETS_AUTH_TOKEN)
   });
@@ -913,7 +997,9 @@ app.use('*', (req, res) => {
       '/',
       '/api/health',
       '/api/ping',
+      '/api/address-suggestions',
       '/api/ohio-address-suggestions',
+      '/api/texas-address-suggestions',
       '/api/address-options',
       '/api/test-smartystreets',
       '/api/test-fallback',
