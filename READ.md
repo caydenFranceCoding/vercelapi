@@ -55,8 +55,4 @@ Nominatim backup for additional coverage
 Smart fallback system  
 Built iin caching  
 Rate limiting  
-CORS enabled  
-
-## Status
-
-Check API health: [https://vercelsmartyapi.vercel.app/api/health](https://vercelsmartyapi.vercel.app/api/health)
+CORS enabled 
