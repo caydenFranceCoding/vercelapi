@@ -6,7 +6,6 @@ require('dotenv').config();
 
 const app = express();
 
-// Vercel-optimized configuration
 const CONFIG = {
   CACHE_TTL: 6 * 60 * 60 * 1000, // 6 hours for vercel
   MAX_CACHE_SIZE: 1000, // smaller cache for serverless operations
