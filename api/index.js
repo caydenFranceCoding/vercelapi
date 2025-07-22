@@ -351,52 +351,6 @@ function formatNominatimAddress(data, targetState = null) {
   }
 }
 
-function getFallbackAddresses(query, state = 'OH') {
-  const fallbackData = {
-    OH: [
-      { address: "123 Main St", city: "Columbus", state: "OH", zipcode: "43215" },
-      { address: "456 High St", city: "Columbus", state: "OH", zipcode: "43215" },
-      { address: "789 Broad St", city: "Columbus", state: "OH", zipcode: "43215" },
-      { address: "321 Superior Ave", city: "Cleveland", state: "OH", zipcode: "44101" },
-      { address: "654 Euclid Ave", city: "Cleveland", state: "OH", zipcode: "44101" },
-      { address: "987 Vine St", city: "Cincinnati", state: "OH", zipcode: "45201" },
-      { address: "147 Race St", city: "Cincinnati", state: "OH", zipcode: "45201" },
-      { address: "258 Market St", city: "Akron", state: "OH", zipcode: "44301" },
-      { address: "369 Wayne Ave", city: "Dayton", state: "OH", zipcode: "45402" },
-      { address: "741 Madison Ave", city: "Toledo", state: "OH", zipcode: "43604" }
-    ],
-    TX: [
-      { address: "123 Main St", city: "Houston", state: "TX", zipcode: "77001" },
-      { address: "456 Congress Ave", city: "Austin", state: "TX", zipcode: "78701" },
-      { address: "789 Elm St", city: "Dallas", state: "TX", zipcode: "75201" },
-      { address: "321 Commerce St", city: "Fort Worth", state: "TX", zipcode: "76102" },
-      { address: "654 Broadway", city: "San Antonio", state: "TX", zipcode: "78205" },
-      { address: "987 University Dr", city: "College Station", state: "TX", zipcode: "77840" },
-      { address: "147 6th St", city: "Austin", state: "TX", zipcode: "78701" },
-      { address: "258 Westheimer Rd", city: "Houston", state: "TX", zipcode: "77006" },
-      { address: "369 McKinney Ave", city: "Dallas", state: "TX", zipcode: "75204" },
-      { address: "741 River Walk", city: "San Antonio", state: "TX", zipcode: "78205" }
-    ]
-  };
-
-  const addresses = fallbackData[state] || fallbackData.OH;
-  const queryLower = query.toLowerCase();
-
-  return addresses
-    .map(addr => ({
-      ...addr,
-      verified: false,
-      source: "fallback",
-      confidence: "fallback"
-    }))
-    .filter(addr => {
-      const addressLower = `${addr.address} ${addr.city}`.toLowerCase();
-      return addressLower.includes(queryLower) ||
-             queryLower.split(' ').some(word => word.length > 2 && addressLower.includes(word));
-    })
-    .slice(0, 5);
-}
-
 async function validateSmartyStreetsConfig() {
   const authId = process.env.SMARTYSTREETS_AUTH_ID;
   const authToken = process.env.SMARTYSTREETS_AUTH_TOKEN;
@@ -456,7 +410,7 @@ app.get('/api/health', (req, res) => {
         authToken: process.env.SMARTYSTREETS_AUTH_TOKEN ? '****' : 'not set'
       },
       nominatim: true,
-      fallback: true
+      fallback: false
     },
     supported_states: ['OH', 'TX'],
     config: {
@@ -526,18 +480,10 @@ app.get('/api/test-smartystreets', async (req, res) => {
 });
 
 app.get('/api/test-fallback', (req, res) => {
-  const { query = 'main', state = 'OH' } = req.query;
-  const suggestions = getFallbackAddresses(query, state.toUpperCase());
-
   res.json({
-    success: true,
-    suggestions: suggestions,
-    metadata: {
-      source: 'test-fallback',
-      count: suggestions.length,
-      query: query,
-      state: state.toUpperCase()
-    }
+    success: false,
+    message: 'Fallback addresses have been disabled',
+    note: 'This endpoint now returns empty results'
   });
 });
 
@@ -715,33 +661,19 @@ app.get('/api/address-suggestions', async (req, res) => {
       }
     }
 
-    if (rawSuggestions.length < 2) {
-      console.log(`[${requestId}] Using fallback addresses for query: "${normalizedQuery}" in ${targetState}`);
-      const fallbackSuggestions = getFallbackAddresses(normalizedQuery, targetState);
-
-      if (fallbackSuggestions.length > 0) {
-        const uniqueFallbacks = fallbackSuggestions.filter(fallback => {
-          return !rawSuggestions.some(existing =>
-            existing.address.toLowerCase() === fallback.address.toLowerCase() &&
-            existing.city.toLowerCase() === fallback.city.toLowerCase()
-          );
-        });
-
-        rawSuggestions = [...rawSuggestions, ...uniqueFallbacks].slice(0, resultLimit);
-        metadata.providers.push('fallback');
-      }
-    }
-
     if (rawSuggestions.length === 0) {
-      const defaultCity = targetState === 'OH' ? 'Columbus' : 'Houston';
-      const defaultZip = targetState === 'OH' ? '43215' : '77001';
+      console.log(`[${requestId}] No addresses found for: "${normalizedQuery}" in ${targetState}`);
       
-      rawSuggestions = [
-        { address: "123 Main St", city: defaultCity, state: targetState, zipcode: defaultZip, verified: false, source: "default", confidence: "low" },
-        { address: "456 High St", city: defaultCity, state: targetState, zipcode: defaultZip, verified: false, source: "default", confidence: "low" },
-        { address: "789 Broad St", city: defaultCity, state: targetState, zipcode: defaultZip, verified: false, source: "default", confidence: "low" }
-      ];
-      metadata.providers.push('default');
+      return res.json({
+        success: true,
+        addresses: [],
+        options: [],
+        metadata: {
+          ...metadata,
+          count: 0,
+          message: 'No addresses found. Please check spelling or enter manually.'
+        }
+      });
     }
 
     const formattedAddresses = rawSuggestions.map((addr, index) => ({
@@ -785,48 +717,11 @@ app.get('/api/address-suggestions', async (req, res) => {
   } catch (error) {
     console.error(`[${requestId}] Unexpected error:`, error);
 
-    const defaultCity = req.query.state === 'TX' ? 'Houston' : 'Columbus';
-    const defaultState = req.query.state === 'TX' ? 'TX' : 'OH';
-    const defaultZip = req.query.state === 'TX' ? '77001' : '43215';
-
-    const emergencyAddresses = [
-      {
-        id: 'addr_emergency',
-        fullAddress: `123 Main St, ${defaultCity}, ${defaultState} ${defaultZip}`,
-        address: '123 Main St',
-        city: defaultCity,
-        state: defaultState,
-        zipcode: defaultZip,
-        verified: false,
-        confidence: 'low',
-        source: 'emergency',
-        metadata: {}
-      }
-    ];
-
-    const emergencyOptions = [
-      {
-        value: `123 Main St, ${defaultCity}, ${defaultState} ${defaultZip}`,
-        label: `123 Main St, ${defaultCity}, ${defaultState} ${defaultZip}`,
-        verified: false,
-        confidence: 'low',
-        id: 'addr_emergency'
-      }
-    ];
-
-    res.json({
-      success: true,
-      addresses: emergencyAddresses,
-      options: emergencyOptions,
-      metadata: {
-        query: req.query.query || '',
-        state: defaultState,
-        count: 1,
-        requestId,
-        source: 'emergency',
-        providers: ['emergency'],
-        error: 'fallback_due_to_error'
-      }
+    res.status(500).json({
+      success: false,
+      error: 'Address search temporarily unavailable',
+      message: 'Please enter your address manually',
+      requestId
     });
   }
 });
@@ -879,13 +774,22 @@ app.get('/api/address-options', async (req, res) => {
       });
     }
 
-    const fallbackSuggestions = getFallbackAddresses(normalizedQuery, targetState);
-    const options = fallbackSuggestions.map((addr, index) => ({
-      value: `${addr.address}, ${addr.city}, ${addr.state} ${addr.zipcode}`,
-      label: `${addr.address}, ${addr.city}, ${addr.state} ${addr.zipcode}`,
-      verified: false,
-      confidence: 'fallback',
-      id: `addr_${index + 1}`
+    const addressResponse = await axios.get(`${req.protocol}://${req.get('host')}/api/address-suggestions`, {
+      params: {
+        query: query,
+        state: targetState,
+        limit: resultLimit
+      }
+    });
+    
+    const addressData = addressResponse.data;
+
+    const options = (addressData.addresses || []).map(addr => ({
+      value: addr.fullAddress,
+      label: addr.fullAddress,
+      verified: addr.verified,
+      confidence: addr.confidence,
+      id: addr.id
     }));
 
     res.json({
@@ -901,14 +805,15 @@ app.get('/api/address-options', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch address options',
-      options: []
+      options: [],
+      message: 'Please enter your address manually'
     });
   }
 });
 
 app.get('/api/docs', (req, res) => {
   res.json({
-    service: 'Multi-State Address API',
+    service: 'MULTI STATE ADDRESS API',
     version: '2.1.0',
     platform: 'vercel',
     supported_states: ['OH', 'TX'],
@@ -946,7 +851,7 @@ app.get('/api/docs', (req, res) => {
           example: '/api/address-options?query=123%20Main&state=TX&limit=8'
         },
         'GET /api/test-smartystreets': 'Test SmartyStreets API connection',
-        'GET /api/test-fallback': 'Test fallback addresses',
+        'GET /api/test-fallback': 'Disabled - fallback addresses removed',
         'GET /api/health': 'Health check with system stats',
         'GET /api/ping': 'Simple ping endpoint'
       },
