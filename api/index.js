@@ -993,6 +993,24 @@ app.use((error, req, res, next) => {
   });
 });
 
+app.use((error, req, res, next) => {
+  const errorId = `err_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+  console.error(`[${errorId}] Global error:`, {
+    message: error.message,
+    stack: CONFIG.ENABLE_DETAILED_LOGGING ? error.stack : undefined,
+    url: req.originalUrl,
+    method: req.method
+  });
+
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    code: 'GLOBAL_ERROR',
+    errorId: CONFIG.ENABLE_DETAILED_LOGGING ? errorId : undefined
+  });
+});
+
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
