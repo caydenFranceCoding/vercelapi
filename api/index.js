@@ -7,14 +7,14 @@ require('dotenv').config();
 const app = express();
 
 const CONFIG = {
-  CACHE_TTL: 6 * 60 * 60 * 1000,
-  MAX_CACHE_SIZE: 1000,
+  CACHE_TTL: 12 * 60 * 60 * 1000, 
+  MAX_CACHE_SIZE: 2000, 
   RATE_LIMIT_WINDOW: 15 * 60 * 1000,
-  MAX_REQUESTS_PER_WINDOW: 200,
-  SMARTYSTREETS_TIMEOUT: 8000,
-  NOMINATIM_TIMEOUT: 5000,
-  MAX_RETRIES: 2,
-  RETRY_DELAY: 500,
+  MAX_REQUESTS_PER_WINDOW: 300, 
+  SMARTYSTREETS_TIMEOUT: 4000, 
+  NOMINATIM_TIMEOUT: 3000, 
+  MAX_RETRIES: 1,
+  RETRY_DELAY: 200, 
   ENABLE_DETAILED_LOGGING: process.env.NODE_ENV === 'production'
 };
 
@@ -213,9 +213,12 @@ const smartyAxios = axios.create({
   headers: {
     'User-Agent': 'WattKarma-MultiStateAPI-Vercel/2.1',
     'Accept': 'application/json',
-    'Accept-Encoding': 'gzip, deflate',
-    'Content-Type': 'application/json'
-  }
+    'Accept-Encoding': 'gzip, deflate, br', 
+    'Content-Type': 'application/json',
+    'Connection': 'keep-alive' 
+  },
+  maxRedirects: 0, 
+  validateStatus: (status) => status < 500
 });
 
 const nominatimAxios = axios.create({
@@ -224,8 +227,11 @@ const nominatimAxios = axios.create({
   headers: {
     'User-Agent': 'MultiStateAPI-Vercel/2.1 (contact@wattkarma.com)',
     'Accept': 'application/json',
-    'Accept-Encoding': 'gzip, deflate'
-  }
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive'
+  },
+  maxRedirects: 0,
+  validateStatus: (status) => status < 500
 });
 
 function requestLogger(req, res, next) {
@@ -547,123 +553,111 @@ app.get('/api/address-suggestions', async (req, res) => {
     const authToken = process.env.SMARTYSTREETS_AUTH_TOKEN;
     const smartyConfigured = !!(authId && authToken);
 
+    const promises = [];
+
     if (smartyConfigured) {
-      try {
-        console.log(`[${requestId}] Trying SmartyStreets for: "${normalizedQuery}" in ${targetState}`);
-
-        const response = await retryWithBackoff(() =>
-          smartyAxios.get('/street-address', {
-            params: {
-              'auth-id': authId,
-              'auth-token': authToken,
-              street: query.trim(),
-              state: targetState,
-              candidates: Math.min(resultLimit + 5, 15),
-              match: 'enhanced'
-            }
-          })
-        );
-
-        if (Array.isArray(response.data) && response.data.length > 0) {
-          const formatted = response.data
-            .map(data => formatSmartyStreetsAddress(data, targetState))
-            .filter(Boolean)
-            .filter(addr => addr.state === targetState)
-            .sort((a, b) => {
-              const confidenceOrder = { 'high': 3, 'medium': 2, 'low': 1 };
-              const aScore = confidenceOrder[a.confidence] || 0;
-              const bScore = confidenceOrder[b.confidence] || 0;
-              return bScore - aScore;
-            })
-            .slice(0, resultLimit);
-
-          if (formatted.length > 0) {
-            rawSuggestions = formatted;
-            metadata.source = 'smartystreets';
-            metadata.count = formatted.length;
-            metadata.providers.push('smartystreets');
-            metadata.smartystreets_raw_count = response.data.length;
-            console.log(`[${requestId}] SmartyStreets success: ${formatted.length} results`);
+      const smartyPromise = retryWithBackoff(() =>
+        smartyAxios.get('/street-address', {
+          params: {
+            'auth-id': authId,
+            'auth-token': authToken,
+            street: query.trim(),
+            state: targetState,
+            candidates: Math.min(resultLimit + 5, 15),
+            match: 'enhanced'
           }
-        }
+        })
+      ).then(response => ({
+        source: 'smartystreets',
+        data: response.data,
+        success: true
+      })).catch(error => ({
+        source: 'smartystreets',
+        error: error,
+        success: false
+      }));
 
-        if (rawSuggestions.length === 0) {
-          console.log(`[${requestId}] SmartyStreets returned no ${targetState} addresses`);
-          metadata.providers.push(`smartystreets_no_${targetState.toLowerCase()}_results`);
-        }
-
-      } catch (error) {
-        console.error(`[${requestId}] SmartyStreets error:`, error.response?.status, error.message);
-        metadata.providers.push(`smartystreets_error_${error.response?.status || 'unknown'}`);
-        metadata.smartystreets_error = error.response?.data?.message || error.message;
-      }
-    } else {
-      console.log(`[${requestId}] SmartyStreets not configured (missing credentials)`);
-      metadata.providers.push('smartystreets_not_configured');
+      promises.push(smartyPromise);
     }
 
-    if (rawSuggestions.length < 3) {
-      try {
-        const stateName = targetState === 'OH' ? 'Ohio' : 'Texas';
-        console.log(`[${requestId}] Trying Nominatim for additional results: "${normalizedQuery}" in ${stateName}`);
-
-        const nominatimResponse = await Promise.race([
-          nominatimAxios.get('/search', {
-            params: {
-              q: `${query.trim()}, ${stateName}, USA`,
-              format: 'json',
-              addressdetails: 1,
-              limit: Math.min(resultLimit + 3, 10),
-              countrycodes: 'us',
-              'accept-language': 'en'
-            }
-          }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Nominatim timeout')), 4000)
-          )
-        ]);
-
-        if (Array.isArray(nominatimResponse.data) && nominatimResponse.data.length > 0) {
-          const stateAddresses = nominatimResponse.data
-            .filter(addr => {
-              const state = addr.address?.state?.toLowerCase();
-              if (targetState === 'OH') {
-                return state && (state.includes('ohio') || state === 'oh');
-              } else if (targetState === 'TX') {
-                return state && (state.includes('texas') || state === 'tx');
-              }
-              return false;
-            })
-            .map(data => formatNominatimAddress(data, targetState))
-            .filter(Boolean)
-            .filter(addr => {
-              return !rawSuggestions.some(existing =>
-                existing.address.toLowerCase() === addr.address.toLowerCase() &&
-                existing.city.toLowerCase() === addr.city.toLowerCase()
-              );
-            });
-
-          if (stateAddresses.length > 0) {
-            rawSuggestions = [...rawSuggestions, ...stateAddresses].slice(0, resultLimit);
-            metadata.providers.push('nominatim');
-            metadata.nominatim_raw_count = nominatimResponse.data.length;
-            console.log(`[${requestId}] Nominatim added ${stateAddresses.length} additional results`);
-          } else {
-            metadata.providers.push(`nominatim_no_${targetState.toLowerCase()}_results`);
-          }
-        } else {
-          metadata.providers.push('nominatim_no_results');
+    const stateName = targetState === 'OH' ? 'Ohio' : 'Texas';
+    const nominatimPromise = Promise.race([
+      nominatimAxios.get('/search', {
+        params: {
+          q: `${query.trim()}, ${stateName}, USA`,
+          format: 'json',
+          addressdetails: 1,
+          limit: Math.min(resultLimit + 3, 10),
+          countrycodes: 'us',
+          'accept-language': 'en'
         }
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Nominatim timeout')), 3000) 
+      )
+    ]).then(response => ({
+      source: 'nominatim',
+      data: response.data,
+      success: true
+    })).catch(error => ({
+      source: 'nominatim',
+      error: error,
+      success: false
+    }));
 
-      } catch (error) {
-        console.error(`[${requestId}] Nominatim error:`, error.message);
-        metadata.providers.push('nominatim_error');
+    promises.push(nominatimPromise);
+
+    const results = await Promise.allSettled(promises);
+
+    const smartyResult = results.find(r => r.value?.source === 'smartystreets');
+    if (smartyResult?.status === 'fulfilled' && smartyResult.value.success) {
+      const formatted = smartyResult.value.data
+        .map(data => formatSmartyStreetsAddress(data, targetState))
+        .filter(Boolean)
+        .filter(addr => addr.state === targetState)
+        .sort((a, b) => {
+          const confidenceOrder = { 'high': 3, 'medium': 2, 'low': 1 };
+          const aScore = confidenceOrder[a.confidence] || 0;
+          const bScore = confidenceOrder[b.confidence] || 0;
+          return bScore - aScore;
+        })
+        .slice(0, resultLimit);
+
+      if (formatted.length > 0) {
+        rawSuggestions = formatted;
+        metadata.source = 'smartystreets';
+        metadata.providers.push('smartystreets');
+      }
+    }
+
+    const nominatimResult = results.find(r => r.value?.source === 'nominatim');
+    if (rawSuggestions.length < resultLimit && nominatimResult?.status === 'fulfilled' && nominatimResult.value.success) {
+      const stateAddresses = nominatimResult.value.data
+        .filter(addr => {
+          const state = addr.address?.state?.toLowerCase();
+          if (targetState === 'OH') {
+            return state && (state.includes('ohio') || state === 'oh');
+          } else if (targetState === 'TX') {
+            return state && (state.includes('texas') || state === 'tx');
+          }
+          return false;
+        })
+        .map(data => formatNominatimAddress(data, targetState))
+        .filter(Boolean)
+        .filter(addr => {
+          return !rawSuggestions.some(existing =>
+            existing.address.toLowerCase() === addr.address.toLowerCase() &&
+            existing.city.toLowerCase() === addr.city.toLowerCase()
+          );
+        });
+
+      if (stateAddresses.length > 0) {
+        rawSuggestions = [...rawSuggestions, ...stateAddresses].slice(0, resultLimit);
+        metadata.providers.push('nominatim');
       }
     }
 
     if (rawSuggestions.length === 0) {
-      console.log(`[${requestId}] No addresses found for: "${normalizedQuery}" in ${targetState}`);
-      
       return res.json({
         success: true,
         addresses: [],
@@ -716,7 +710,6 @@ app.get('/api/address-suggestions', async (req, res) => {
 
   } catch (error) {
     console.error(`[${requestId}] Unexpected error:`, error);
-
     res.status(500).json({
       success: false,
       error: 'Address search temporarily unavailable',
@@ -725,6 +718,7 @@ app.get('/api/address-suggestions', async (req, res) => {
     });
   }
 });
+
 
 app.get('/api/ohio-address-suggestions', async (req, res) => {
   const queryParams = new URLSearchParams(req.query);
