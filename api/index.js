@@ -22,10 +22,15 @@ app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
 
+    app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+
     const allowedOrigins = [
       'https://app.hubspot.com',
       'https://wattkarma.com',
       'https://www.wattkarma.com',
+      'https://wattkarma.com/meteradd',
       process.env.FRONTEND_URL,
       process.env.CLIENT_URL,
       /^https:\/\/.*\.hubspot\.com$/,
